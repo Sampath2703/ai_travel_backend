@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+requests
+langchain
+langchain-groq
+langchain-core
+tavily-python
+ntes-client
