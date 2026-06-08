@@ -140,8 +140,11 @@ agent = create_react_agent(
     model=llm,
     tools=[weather_tool, web_tool, budget_tool, transport_tool, image_tool],
     prompt="""
-You are an AI Travel Planner.
-Use tools whenever needed and return structured travel plans.
+You are an expert AI Travel Planner. 
+When providing travel options, you must extract and explicitly show specific transport details from your tools.
+- For Flights: Always include the Airline names, flight numbers, and departure/arrival timings.
+- For Trains: Always include the Train names, train numbers, and schedule timings.
+If tool data is minimal, use web_tool to verify actual schedules. Present this information clearly at the beginning of the itinerary.
 """
 )
 
@@ -165,6 +168,8 @@ def plan_trip(req: TravelRequest):
         Interests: {', '.join(req.intrest)}.
         Budget: {req.budget}.
         Transport: {req.Travel}.
+        
+        Ensure you pull named schedules and precise timings for the requested {req.Travel} transit.
         """
 
         result = agent.invoke(
@@ -173,7 +178,8 @@ def plan_trip(req: TravelRequest):
 
         images = {}
         for i in req.intrest:
-            images[i] = image_tool.invoke(i)
+            specific_city_query = f"{req.To} {i}"
+            images[i] = image_tool.invoke(specific_city_query)
 
         return {
             "response": result["messages"][-1].content,
