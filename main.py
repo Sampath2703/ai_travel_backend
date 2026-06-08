@@ -124,7 +124,7 @@ def image_tool(query: str):
     }
     params = {
         "query": query,
-        "per_page": 3
+        "per_page": 4
     }
 
     res = requests.get(url, headers=headers, params=params)
@@ -176,10 +176,14 @@ def plan_trip(req: TravelRequest):
             {"messages": [HumanMessage(content=query)]}
         )
 
-        images = {}
-        for i in req.intrest:
-            specific_city_query = f"{req.To} {i}"
-            images[i] = image_tool.invoke(specific_city_query)
+        # Combined single API query approach to optimize performance and prevent rate-limiting
+        interests_string = " ".join(req.intrest) if req.intrest else "tourism"
+        combined_query = f"{req.To} {interests_string}"
+        
+        fetched_images = image_tool.invoke(combined_query)
+
+        # Structure the dictionary cleanly for your Streamlit UI rendering logic
+        images = {"Gallery": fetched_images} if fetched_images else {}
 
         return {
             "response": result["messages"][-1].content,
