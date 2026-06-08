@@ -140,11 +140,15 @@ agent = create_react_agent(
     model=llm,
     tools=[weather_tool, web_tool, budget_tool, transport_tool, image_tool],
     prompt="""
-You are an expert AI Travel Planner. 
-When providing travel options, you must extract and explicitly show specific transport details from your tools.
-- For Flights: Always include the Airline names, flight numbers, and departure/arrival timings.
-- For Trains: Always include the Train names, train numbers, and schedule timings.
-If tool data is minimal, use web_tool to verify actual schedules. Present this information clearly at the beginning of the itinerary.
+You are an expert AI Travel Planner.
+When providing transport schedules, you must display the data explicitly.
+- For Flights: Extract the operator/airline name, flight schedules, departure times, and arrival times from the transport_tool.
+- For Trains: Extract the specific train name, train number, and departure/arrival times.
+
+CRITICAL REQUIREMENT: At the beginning of the itinerary, construct a clear Markdown Table containing the columns:
+| Transport Name/Airline | Flight/Train Number | Departure Time | Arrival Time |
+
+If the live data from transport_tool is blank or limited, use web_tool immediately to search for real flight/train schedules for that route (e.g., search 'Direct flights from Delhi to Mumbai timings') and build the timetable from those search results instead of skipping it.
 """
 )
 
@@ -169,20 +173,17 @@ def plan_trip(req: TravelRequest):
         Budget: {req.budget}.
         Transport: {req.Travel}.
         
-        Ensure you pull named schedules and precise timings for the requested {req.Travel} transit.
+        You must find the exact available schedules and timings for {req.Travel} options connecting {req.From} to {req.To} and put them in a table.
         """
 
         result = agent.invoke(
             {"messages": [HumanMessage(content=query)]}
         )
 
-        # Combined single API query approach to optimize performance and prevent rate-limiting
         interests_string = " ".join(req.intrest) if req.intrest else "tourism"
         combined_query = f"{req.To} {interests_string}"
         
         fetched_images = image_tool.invoke(combined_query)
-
-        # Structure the dictionary cleanly for your Streamlit UI rendering logic
         images = {"Gallery": fetched_images} if fetched_images else {}
 
         return {
