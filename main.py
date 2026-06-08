@@ -1,6 +1,7 @@
 import os
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 
@@ -11,6 +12,14 @@ from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 tavily_api_key = os.getenv("TAVILY_API_KEY")
 rapid_api_key = os.getenv("RAPID_API_KEY")
@@ -161,6 +170,11 @@ class TravelRequest(BaseModel):
     trip_type: str
     Travel: str
     intrest: List[str]
+
+
+@app.get("/")
+def read_root():
+    return {"status": "Backend running successfully"}
 
 
 @app.post("/plan")
