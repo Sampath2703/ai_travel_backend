@@ -1,6 +1,7 @@
 import os
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 
@@ -11,6 +12,15 @@ from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 
 app = FastAPI()
+
+# Enable CORS for cross-domain communication
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 tavily_api_key = os.getenv("TAVILY_API_KEY")
 rapid_api_key = os.getenv("RAPID_API_KEY")
@@ -37,7 +47,11 @@ def weather_tool(city: str):
         "appid": weather_api,
         "units": "metric"
     }
-    return requests.get(url, params=params).json()
+    try:
+        res = requests.get(url, params=params)
+        return res.json()
+    except Exception:
+        return {"info": f"Weather data for {city} is currently unavailable."}
 
 
 @tool
@@ -45,7 +59,10 @@ def web_tool(query: str):
     """
     Search travel-related information from the web.
     """
-    return tavily.search(query=query, max_results=5)
+    try:
+        return tavily.search(query=query, max_results=5)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @tool
@@ -80,35 +97,48 @@ def transport_tool(data: str):
     """
     try:
         mode, origin, destination = data.split(",")
+        mode = mode.strip().lower()
+        origin = origin.strip()
+        destination = destination.strip()
 
         headers = {"X-RapidAPI-Key": rapid_api_key}
 
-        if mode.lower() == "flight":
+        # Accurate dictionary fallback mapping for Indian hubs to prevent 3-letter slicing errors
+        airport_map = {
+            "delhi": "DEL", "mumbai": "BOM", "bangalore": "BLR",
+            "bengaluru": "BLR", "goa": "GOI", "hyderabad": "HYD",
+            "chennai": "MAA", "kolkata": "CCU", "pune": "PNQ"
+        }
+
+        if mode == "flight":
             headers["X-RapidAPI-Host"] = "aerodatabox.p.rapidapi.com"
             url = "https://aerodatabox.p.rapidapi.com/flights/search/routes"
-            params = {
-                "departureAirport": origin[:3].upper(),
-                "arrivalAirport": destination[:3].upper()
-            }
-            return requests.get(url, headers=headers, params=params).json()
+            
+            dep = airport_map.get(origin.lower(), origin[:3].upper())
+            arr = airport_map.get(destination.lower(), destination[:3].upper())
+            
+            params = {"departureAirport": dep, "arrivalAirport": arr}
+            res = requests.get(url, headers=headers, params=params)
+            return res.json() if res.status_code == 200 else {"info": "No live flight schedules returned."}
 
-        elif mode.lower() == "train":
+        elif mode == "train":
             headers["X-RapidAPI-Host"] = "indian-railway-v3.p.rapidapi.com"
             url = "https://indian-railway-v3.p.rapidapi.com/trains/betweenStations"
             params = {
                 "fromStationCode": origin[:3].upper(),
                 "toStationCode": destination[:3].upper()
             }
-            return requests.get(url, headers=headers, params=params).json()
+            res = requests.get(url, headers=headers, params=params)
+            return res.json() if res.status_code == 200 else {"info": "No live trains found on this route."}
 
-        elif mode.lower() == "bus":
+        elif mode == "bus":
             headers["X-RapidAPI-Host"] = "distance-calculator8.p.rapidapi.com"
             url = "https://distance-calculator8.p.rapidapi.com/distance"
             params = {"origin": origin, "destination": destination}
-            return requests.get(url, headers=headers, params=params).json()
+            res = requests.get(url, headers=headers, params=params)
+            return res.json() if res.status_code == 200 else {"info": "Bus options route data missing."}
 
         return {"error": "Invalid mode"}
-
     except Exception as e:
         return {"error": str(e)}
 
@@ -118,33 +148,34 @@ def image_tool(query: str):
     """
     Fetch travel-related images using Unsplash API.
     """
+    if not unsplash_key:
+        return []
     url = "https://api.unsplash.com/search/photos"
-    headers = {
-        "Authorization": f"Client-ID {unsplash_key}"
-    }
-    params = {
-        "query": query,
-        "per_page": 4
-    }
-
-    res = requests.get(url, headers=headers, params=params)
-    data = res.json()
-
-    return [
-        img["urls"]["regular"]
-        for img in data.get("results", [])
-    ]
+    headers = {"Authorization": f"Client-ID {unsplash_key}"}
+    params = {"query": query, "per_page": 4}
+    try:
+        res = requests.get(url, headers=headers, params=params)
+        if res.status_code == 200:
+            data = res.json()
+            return [img["urls"]["regular"] for img in data.get("results", []) if "urls" in img]
+        return []
+    except Exception:
+        return []
 
 
 agent = create_react_agent(
     model=llm,
     tools=[weather_tool, web_tool, budget_tool, transport_tool, image_tool],
     prompt="""
-You are an expert AI Travel Planner. 
-When providing travel options, you must extract and explicitly show specific transport details from your tools.
-- For Flights: Always include the Airline names, flight numbers, and departure/arrival timings.
-- For Trains: Always include the Train names, train numbers, and schedule timings.
-If tool data is minimal, use web_tool to verify actual schedules. Present this information clearly at the beginning of the itinerary.
+You are an expert AI Travel Planner.
+When providing transport schedules, you must display the data explicitly.
+- For Flights: Extract the operator/airline name, flight schedules, departure times, and arrival times.
+- For Trains: Extract the specific train name, train number, and departure/arrival times.
+
+CRITICAL REQUIREMENT: At the beginning of the itinerary, construct a clear Markdown Table containing the columns:
+| Transport Name/Airline | Flight/Train Number | Departure Time | Arrival Time |
+
+If the live data from transport_tool returns an error or empty responses, use web_tool immediately to search for actual flight/train schedules for that route (e.g., search 'Direct flights from Delhi to Mumbai timings') and build the timetable from those search results instead of omitting it.
 """
 )
 
@@ -159,6 +190,11 @@ class TravelRequest(BaseModel):
     intrest: List[str]
 
 
+@app.get("/")
+def read_root():
+    return {"status": "Backend running successfully"}
+
+
 @app.post("/plan")
 def plan_trip(req: TravelRequest):
     try:
@@ -169,26 +205,20 @@ def plan_trip(req: TravelRequest):
         Budget: {req.budget}.
         Transport: {req.Travel}.
         
-        Ensure you pull named schedules and precise timings for the requested {req.Travel} transit.
+        You must find the exact available schedules and timings for {req.Travel} options connecting {req.From} to {req.To} and put them in a table.
         """
 
-        result = agent.invoke(
-            {"messages": [HumanMessage(content=query)]}
-        )
+        result = agent.invoke({"messages": [HumanMessage(content=query)]})
 
-        # Combined single API query approach to optimize performance and prevent rate-limiting
         interests_string = " ".join(req.intrest) if req.intrest else "tourism"
         combined_query = f"{req.To} {interests_string}"
         
         fetched_images = image_tool.invoke(combined_query)
-
-        # Structure the dictionary cleanly for your Streamlit UI rendering logic
         images = {"Gallery": fetched_images} if fetched_images else {}
 
         return {
             "response": result["messages"][-1].content,
             "images": images
         }
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
