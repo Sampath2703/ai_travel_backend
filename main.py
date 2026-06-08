@@ -1,8 +1,8 @@
+import os
+import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
-import os
-import requests
 
 from tavily import TavilyClient
 from langchain_groq import ChatGroq
@@ -12,27 +12,26 @@ from langgraph.prebuilt import create_react_agent
 
 app = FastAPI()
 
-tavily_api_key = api_key=os.getenv("TAVILY_API_KEY")
+tavily_api_key = os.getenv("TAVILY_API_KEY")
 rapid_api_key = os.getenv("RAPID_API_KEY")
 weather_api = os.getenv("WEATHER_API_KEY")
 unsplash_key = os.getenv("UNSPLASH_API_KEY")
 groq_api_key = os.getenv("GROQ_API_KEY")
 
-tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+tavily = TavilyClient(api_key=tavily_api_key)
 
 llm = ChatGroq(
     model="llama-3.3-70b-versatile",
-    api_key = groq_api_key
+    api_key=groq_api_key
 )
 
 
 @tool
-
-def weather_tool(city:str):
+def weather_tool(city: str):
     """
     Get current weather information for a city.
     """
-    url= "https://api.openweathermap.org/data/2.5/weather"
+    url = "https://api.openweathermap.org/data/2.5/weather"
     params = {
         "q": city,
         "appid": weather_api,
@@ -82,7 +81,7 @@ def transport_tool(data: str):
     try:
         mode, origin, destination = data.split(",")
 
-        headers = {"X-RapidAPI-Key": RAPID_API_KEY}
+        headers = {"X-RapidAPI-Key": rapid_api_key}
 
         if mode.lower() == "flight":
             headers["X-RapidAPI-Host"] = "aerodatabox.p.rapidapi.com"
@@ -120,11 +119,9 @@ def image_tool(query: str):
     Fetch travel-related images using Unsplash API.
     """
     url = "https://api.unsplash.com/search/photos"
-
     headers = {
-        "Authorization": f"Client-ID {UNSPLASH_API_KEY}"
+        "Authorization": f"Client-ID {unsplash_key}"
     }
-
     params = {
         "query": query,
         "per_page": 3
@@ -142,11 +139,12 @@ def image_tool(query: str):
 agent = create_react_agent(
     model=llm,
     tools=[weather_tool, web_tool, budget_tool, transport_tool, image_tool],
-    state_modifier="""
+    prompt="""
 You are an AI Travel Planner.
 Use tools whenever needed and return structured travel plans.
 """
 )
+
 
 class TravelRequest(BaseModel):
     From: str
@@ -184,6 +182,3 @@ def plan_trip(req: TravelRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
