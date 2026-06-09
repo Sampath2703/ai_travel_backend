@@ -98,39 +98,53 @@ def transport_tool(data: str):
     try:
         mode, origin, destination = data.split(",")
         mode = mode.strip().lower()
-        origin = origin.strip()
-        destination = destination.strip()
+        origin = origin.strip().lower()
+        destination = destination.strip().lower()
 
         headers = {"X-RapidAPI-Key": rapid_api_key}
 
-        # Accurate dictionary fallback mapping for Indian hubs to prevent 3-letter slicing errors
-        airport_map = {
-            "delhi": "DEL", "mumbai": "BOM", "bangalore": "BLR",
-            "bengaluru": "BLR", "goa": "GOI", "hyderabad": "HYD",
-            "chennai": "MAA", "kolkata": "CCU", "pune": "PNQ"
+        # Shared mapping for major hubs across flights and trains
+        station_map = {
+            "delhi": {"flight": "DEL", "train": "NDLS"},
+            "mumbai": {"flight": "BOM", "train": "CSMT"},
+            "bangalore": {"flight": "BLR", "train": "SBC"},
+            "bengaluru": {"flight": "BLR", "train": "SBC"},
+            "goa": {"flight": "GOI", "train": "MAO"},
+            "hyderabad": {"flight": "HYD", "train": "SC"},
+            "chennai": {"flight": "MAA", "train": "MAS"},
+            "kolkata": {"flight": "CCU", "train": "HWH"},
+            "pune": {"flight": "PNQ", "train": "PUNE"}
         }
 
+        # --- FLIGHT MODE ---
         if mode == "flight":
             headers["X-RapidAPI-Host"] = "aerodatabox.p.rapidapi.com"
             url = "https://aerodatabox.p.rapidapi.com/flights/search/routes"
             
-            dep = airport_map.get(origin.lower(), origin[:3].upper())
-            arr = airport_map.get(destination.lower(), destination[:3].upper())
+            dep = station_map.get(origin, {}).get("flight", origin[:3].upper())
+            arr = station_map.get(destination, {}).get("flight", destination[:3].upper())
             
             params = {"departureAirport": dep, "arrivalAirport": arr}
             res = requests.get(url, headers=headers, params=params)
             return res.json() if res.status_code == 200 else {"info": "No live flight schedules returned."}
 
+        # --- TRAIN MODE ---
         elif mode == "train":
             headers["X-RapidAPI-Host"] = "indian-railway-v3.p.rapidapi.com"
             url = "https://indian-railway-v3.p.rapidapi.com/trains/betweenStations"
-            params = {
-                "fromStationCode": origin[:3].upper(),
-                "toStationCode": destination[:3].upper()
-            }
+            
+            # If city code isn't explicitly mapped, do not guess with a slice. Return info.
+            if origin not in station_map or destination not in station_map:
+                return {"info": f"Exact railway station codes for {origin} or {destination} are unknown to the API."}
+                
+            dep = station_map[origin]["train"]
+            arr = station_map[destination]["train"]
+            
+            params = {"fromStationCode": dep, "toStationCode": arr}
             res = requests.get(url, headers=headers, params=params)
             return res.json() if res.status_code == 200 else {"info": "No live trains found on this route."}
 
+        # --- BUS MODE ---
         elif mode == "bus":
             headers["X-RapidAPI-Host"] = "distance-calculator8.p.rapidapi.com"
             url = "https://distance-calculator8.p.rapidapi.com/distance"
@@ -139,8 +153,10 @@ def transport_tool(data: str):
             return res.json() if res.status_code == 200 else {"info": "Bus options route data missing."}
 
         return {"error": "Invalid mode"}
+        
     except Exception as e:
-        return {"error": str(e)}
+        # Returning a JSON error instead of raising an unhandled exception keeps FastAPI from throwing 500
+        return {"info": f"Transport tracking failed due to technical error: {str(e)}"}
 
 
 @tool
