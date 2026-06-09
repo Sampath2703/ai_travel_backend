@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Fetch Environment Variables
 tavily_api_key = os.getenv("TAVILY_API_KEY")
 rapid_api_key = os.getenv("RAPID_API_KEY")
 weather_api = os.getenv("WEATHER_API_KEY")
@@ -49,20 +51,23 @@ def weather_tool(city: str):
     }
     try:
         res = requests.get(url, params=params)
-        return res.json()
-    except Exception:
-        return {"info": f"Weather data for {city} is currently unavailable."}
+        output = res.json() if res.status_code == 200 else {"info": f"Weather data for {city} is unavailable."}
+        return json.dumps(output)
+    except Exception as e:
+        return json.dumps({"info": f"Weather data error: {str(e)}"})
 
 
 @tool
 def web_tool(query: str):
     """
     Search travel-related information from the web.
+    Use this to find real-world schedules if transport_tool doesn't yield live results.
     """
     try:
-        return tavily.search(query=query, max_results=5)
+        results = tavily.search(query=query, max_results=5)
+        return json.dumps(results)
     except Exception as e:
-        return {"error": str(e)}
+        return json.dumps({"error": str(e)})
 
 
 @tool
@@ -76,7 +81,7 @@ def budget_tool(data: str):
         budget = float(budget)
         days = int(days)
 
-        return {
+        breakdown = {
             "total": budget,
             "per_day": budget / days,
             "stay": budget * 0.4,
@@ -84,14 +89,15 @@ def budget_tool(data: str):
             "travel": budget * 0.2,
             "activities": budget * 0.1
         }
+        return json.dumps(breakdown)
     except Exception as e:
-        return {"error": str(e)}
+        return json.dumps({"error": str(e)})
 
 
 @tool
 def transport_tool(data: str):
     """
-    Get live transport details.
+    Get live transport details between cities.
     Format: mode,origin,destination
     Example: Flight,Delhi,Mumbai
     """
@@ -103,7 +109,7 @@ def transport_tool(data: str):
 
         headers = {"X-RapidAPI-Key": rapid_api_key}
 
-        # Shared mapping for major hubs across flights and trains
+        # Main Station Hub Mapping
         station_map = {
             "delhi": {"flight": "DEL", "train": "NDLS"},
             "mumbai": {"flight": "BOM", "train": "CSMT"},
@@ -116,7 +122,7 @@ def transport_tool(data: str):
             "pune": {"flight": "PNQ", "train": "PUNE"}
         }
 
-        # --- FLIGHT MODE ---
+        # --- Flight Mode Handling ---
         if mode == "flight":
             headers["X-RapidAPI-Host"] = "aerodatabox.p.rapidapi.com"
             url = "https://aerodatabox.p.rapidapi.com/flights/search/routes"
@@ -126,37 +132,38 @@ def transport_tool(data: str):
             
             params = {"departureAirport": dep, "arrivalAirport": arr}
             res = requests.get(url, headers=headers, params=params)
-            return res.json() if res.status_code == 200 else {"info": "No live flight schedules returned."}
+            output = res.json() if res.status_code == 200 else {"info": "No live flight schedules returned."}
+            return json.dumps(output)
 
-        # --- TRAIN MODE ---
+        # --- Train Mode Handling ---
         elif mode == "train":
             headers["X-RapidAPI-Host"] = "indian-railway-v3.p.rapidapi.com"
             url = "https://indian-railway-v3.p.rapidapi.com/trains/betweenStations"
             
-            # If city code isn't explicitly mapped, do not guess with a slice. Return info.
+            # For custom destinations outside main hubs (like Arunachalam), trigger web search safely
             if origin not in station_map or destination not in station_map:
-                return {"info": f"Exact railway station codes for {origin} or {destination} are unknown to the API."}
+                return json.dumps({"info": f"Exact station codes for {origin} or {destination} are unmapped."})
                 
             dep = station_map[origin]["train"]
             arr = station_map[destination]["train"]
             
             params = {"fromStationCode": dep, "toStationCode": arr}
             res = requests.get(url, headers=headers, params=params)
-            return res.json() if res.status_code == 200 else {"info": "No live trains found on this route."}
+            output = res.json() if res.status_code == 200 else {"info": "No live trains found on this route."}
+            return json.dumps(output)
 
-        # --- BUS MODE ---
+        # --- Bus Mode Handling ---
         elif mode == "bus":
             headers["X-RapidAPI-Host"] = "distance-calculator8.p.rapidapi.com"
             url = "https://distance-calculator8.p.rapidapi.com/distance"
             params = {"origin": origin, "destination": destination}
             res = requests.get(url, headers=headers, params=params)
-            return res.json() if res.status_code == 200 else {"info": "Bus options route data missing."}
+            output = res.json() if res.status_code == 200 else {"info": "Bus routing infrastructure missing."}
+            return json.dumps(output)
 
-        return {"error": "Invalid mode"}
-        
+        return json.dumps({"error": "Invalid transport mode requested."})
     except Exception as e:
-        # Returning a JSON error instead of raising an unhandled exception keeps FastAPI from throwing 500
-        return {"info": f"Transport tracking failed due to technical error: {str(e)}"}
+        return json.dumps({"info": f"Live tracking details unavailable: {str(e)}"})
 
 
 @tool
@@ -165,7 +172,7 @@ def image_tool(query: str):
     Fetch travel-related images using Unsplash API.
     """
     if not unsplash_key:
-        return []
+        return json.dumps([])
     url = "https://api.unsplash.com/search/photos"
     headers = {"Authorization": f"Client-ID {unsplash_key}"}
     params = {"query": query, "per_page": 4}
@@ -173,12 +180,14 @@ def image_tool(query: str):
         res = requests.get(url, headers=headers, params=params)
         if res.status_code == 200:
             data = res.json()
-            return [img["urls"]["regular"] for img in data.get("results", []) if "urls" in img]
-        return []
+            urls = [img["urls"]["regular"] for img in data.get("results", []) if "urls" in img]
+            return json.dumps(urls)
+        return json.dumps([])
     except Exception:
-        return []
+        return json.dumps([])
 
 
+# Agent creation with LangGraph React Architecture
 agent = create_react_agent(
     model=llm,
     tools=[weather_tool, web_tool, budget_tool, transport_tool, image_tool],
@@ -191,7 +200,7 @@ When providing transport schedules, you must display the data explicitly.
 CRITICAL REQUIREMENT: At the beginning of the itinerary, construct a clear Markdown Table containing the columns:
 | Transport Name/Airline | Flight/Train Number | Departure Time | Arrival Time |
 
-If the live data from transport_tool returns an error or empty responses, use web_tool immediately to search for actual flight/train schedules for that route (e.g., search 'Direct flights from Delhi to Mumbai timings') and build the timetable from those search results instead of omitting it.
+If the data from transport_tool returns an unmapped message, error, or empty responses, use web_tool immediately to search for actual real-world flight/train schedules or travel routes for that destination (e.g., search 'Schedules and options from Chennai to Arunachalam') and build the transit timetable from those online search results instead of omitting it.
 """
 )
 
@@ -224,12 +233,19 @@ def plan_trip(req: TravelRequest):
         You must find the exact available schedules and timings for {req.Travel} options connecting {req.From} to {req.To} and put them in a table.
         """
 
+        # Running LangGraph Flow
         result = agent.invoke({"messages": [HumanMessage(content=query)]})
 
+        # Fetch Images
         interests_string = " ".join(req.intrest) if req.intrest else "tourism"
         combined_query = f"{req.To} {interests_string}"
         
-        fetched_images = image_tool.invoke(combined_query)
+        # Raw tool invocation returns a JSON string now, so we load it back to a python list
+        try:
+            fetched_images = json.loads(image_tool.invoke(combined_query))
+        except Exception:
+            fetched_images = []
+            
         images = {"Gallery": fetched_images} if fetched_images else {}
 
         return {
