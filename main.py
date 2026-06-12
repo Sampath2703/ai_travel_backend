@@ -175,7 +175,7 @@ def image_tool(query: str):
         return json.dumps([])
     url = "https://api.unsplash.com/search/photos"
     headers = {"Authorization": f"Client-ID {unsplash_key}"}
-    params = {"query": query, "per_page": 4}
+    params = {"query": query, "per_page": 8}
     try:
         res = requests.get(url, headers=headers, params=params)
         if res.status_code == 200:
